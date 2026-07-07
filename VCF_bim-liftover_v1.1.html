@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LiftOver for .bim and .vcf files</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<style>
+  :root{
+    --blue:#1877F2;
+    --blue-dark:#166FE5;
+    --blue-tint:#E7F3FF;
+    --green:#42B72A;
+    --red:#FA383E;
+    --bg:#F0F2F5;
+    --card:#FFFFFF;
+    --line:#DDDFE2;
+    --text:#050505;
+    --text-dim:#65676B;
+    --text-faint:#8A8D91;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; background:var(--bg); color:var(--text); }
+  body{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.4;
+  }
+  a{ color:var(--blue); text-decoration:none; }
+  a:hover{ text-decoration:underline; }
+
+  /* ---------- Top bar ---------- */
+  .topbar{
+    background:var(--card); border-bottom:1px solid var(--line);
+    padding: 12px 20px; display:flex; align-items:center; gap:10px;
+    position:sticky; top:0; z-index:10;
+  }
+  .topbar .logo{
+    font-size:22px; font-weight:800; color:var(--blue); letter-spacing:-0.02em;
+  }
+  .topbar .tag{ color:var(--text-dim); font-size:13px; }
+
+  .wrap{ max-width: 700px; margin: 20px auto 60px; padding: 0 16px; }
+
+  /* ---------- Cards ---------- */
+  .card{
+    background: var(--card); border:1px solid var(--line); border-radius: 8px;
+    padding: 16px 18px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  }
+  .card-head{ display:flex; align-items:center; gap:10px; margin-bottom: 12px; }
+  .step-num{
+    font-size: 13px; color: #fff; background: var(--blue);
+    width: 24px; height: 24px; border-radius: 50%; display:flex; align-items:center; justify-content:center;
+    flex-shrink:0; font-weight:700;
+  }
+  .card-title{ font-size: 17px; font-weight: 700; color: var(--text); }
+  .card-desc{ color: var(--text-dim); font-size: 13.5px; margin: 0 0 14px 34px; line-height:1.5; }
+
+  h1.hero{
+    font-size: 24px; font-weight: 800; margin: 4px 0 6px; color: var(--text);
+  }
+  p.hero-sub{ color: var(--text-dim); font-size: 14px; margin: 0 0 18px; max-width: 600px; }
+
+  /* ---------- Build pair picker ---------- */
+  .pair-grid{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-left:34px; }
+  .pair-opt{
+    border:1.5px solid var(--line); background: #F7F8FA;
+    border-radius:8px; padding:12px 14px; cursor:pointer; transition: border-color .12s, background .12s;
+  }
+  .pair-opt:hover{ border-color: var(--blue); }
+  .pair-opt.active{ border-color: var(--blue); background: var(--blue-tint); }
+  .pair-opt .name{ font-weight:700; font-size:14.5px; }
+  .pair-opt .desc{ color: var(--text-dim); font-size:12px; margin-top:2px; }
+
+  .chain-link-row{ margin: 14px 0 0 34px; font-size: 13px; color: var(--text-dim); }
+  .chain-link-row code{ background: #F0F2F5; padding:1px 6px; border-radius:4px; font-size:12.5px; color: var(--text); }
+
+  .dropzone{
+    margin-left:34px; margin-top:14px; border:1.5px dashed var(--line); border-radius:8px;
+    padding: 20px; text-align:center; color: var(--text-dim); font-size: 13.5px; cursor:pointer;
+    background: #FAFAFA; transition: border-color .12s, background .12s;
+  }
+  .dropzone:hover, .dropzone.drag{ border-color: var(--blue); background: var(--blue-tint); }
+  .dropzone .dz-title{ color: var(--text); font-weight:700; margin-bottom:4px; }
+  .dropzone input{ display:none; }
+  .file-ok{
+    margin-left:34px; margin-top:10px; display:flex; align-items:center; gap:10px;
+    background: #EFFCEF; border:1px solid #C7EACB; border-radius:8px; padding:10px 14px;
+    font-size: 13px; color: #22662A;
+  }
+  .file-ok .clear{ margin-left:auto; color: var(--text-faint); cursor:pointer; }
+  .file-ok .clear:hover{ color: var(--red); text-decoration:underline; }
+  .file-meta{ color: var(--text-dim); }
+
+  .warn{ margin-left:34px; margin-top:10px; font-size: 13px; color: var(--red); }
+  .notice{ margin-left:34px; margin-top:10px; font-size: 13px; color: #8A5A00; background:#FFF8E1; border:1px solid #FCE8B0; border-radius:6px; padding:8px 12px; }
+
+  .progress-wrap{ flex:1; max-width:260px; height:8px; background:#E4E6EB; border-radius:4px; overflow:hidden; display:none; }
+  .progress-wrap .bar{ height:100%; width:0%; background:var(--blue); transition: width .15s; }
+  .error-banner{ display:none; background:#FDECEA; border:1px solid #F5C2BE; color:#B3261E; border-radius:8px; padding:12px 16px; margin-bottom:16px; font-size:13.5px; }
+
+  /* ---------- Action bar ---------- */
+  .action-bar{ display:flex; align-items:center; gap:14px; margin: 4px 0 20px; }
+  button.run{
+    font-size: 15px; font-weight:700;
+    background: var(--blue); color: #fff; border:none; border-radius:6px;
+    padding: 11px 22px; cursor:pointer; transition: background .12s;
+  }
+  button.run:disabled{ background: #E4E6EB; color: var(--text-faint); cursor:not-allowed; }
+  button.run:not(:disabled):hover{ background: var(--blue-dark); }
+  .status-line{ font-size: 13px; color: var(--text-dim); }
+
+  /* ---------- Results ---------- */
+  #results{ display:none; }
+  .stat-grid{ display:grid; grid-template-columns: repeat(4,1fr); gap:10px; margin-bottom: 18px; }
+  .stat-card{ background: #F7F8FA; border:1px solid var(--line); border-radius:8px; padding:14px; text-align:center; }
+  .stat-card .val{ font-size: 22px; font-weight:800; }
+  .stat-card .lbl{ font-size: 11.5px; color: var(--text-dim); text-transform:uppercase; letter-spacing:0.03em; margin-top:4px; }
+  .stat-card.mapped .val{ color: var(--green); }
+  .stat-card.unmapped .val{ color: var(--red); }
+
+  .chrom-chart{ display:flex; flex-direction:column; gap:5px; margin-bottom: 20px; }
+  .chrom-row{ display:grid; grid-template-columns: 46px 1fr 90px; align-items:center; gap:10px; }
+  .chrom-row .clabel{ font-size: 12px; color: var(--text-dim); text-align:right; font-weight:600; }
+  .chrom-row .bar{ position:relative; height: 12px; background: #E4E6EB; border-radius:3px; overflow:hidden; }
+  .chrom-row .bar .fill-mapped{ position:absolute; left:0; top:0; bottom:0; background: var(--green); }
+  .chrom-row .bar .fill-unmapped{ position:absolute; top:0; bottom:0; background: var(--red); }
+  .chrom-row .count{ font-size:11.5px; color: var(--text-faint); }
+
+  .downloads{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom: 8px; }
+  .dl-btn{
+    font-size: 13.5px; font-weight:600; border:1px solid var(--line); background: #F0F2F5;
+    color: var(--text); padding: 9px 16px; border-radius:6px; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:8px;
+  }
+  .dl-btn:hover{ background:#E4E6EB; text-decoration:none; }
+  .dl-btn.primary{ background: var(--blue); color:#fff; border-color:var(--blue); }
+  .dl-btn.primary:hover{ background: var(--blue-dark); }
+
+  .preview{ margin-top: 16px; }
+  .preview table{ width:100%; border-collapse: collapse; font-size: 12.5px; }
+  .preview th{ text-align:left; color: var(--text-faint); font-weight:600; padding: 6px 8px; border-bottom:1px solid var(--line); text-transform:uppercase; letter-spacing:0.02em; font-size:10.5px;}
+  .preview td{ padding: 6px 8px; border-bottom:1px solid #F0F2F5; color: var(--text-dim); }
+  .preview-title{ font-size:12px; color: var(--text-faint); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.03em; font-weight:600; }
+
+  footer{ margin-top: 24px; color: var(--text-faint); font-size: 12.5px; line-height:1.6; }
+  footer a{ color: var(--text-dim); text-decoration:underline; }
+
+  @media (max-width: 560px){
+    .stat-grid{ grid-template-columns: repeat(2,1fr); }
+    .pair-grid{ grid-template-columns: 1fr; margin-left:0; }
+    .dropzone, .file-ok, .card-desc, .chain-link-row, .warn{ margin-left:0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="logo">liftover</span>
+  <span class="tag">for PLINK .bim and VCF files</span>
+</div>
+
+<div class="wrap">
+
+  <h1 class="hero">Lift .bim or .vcf coordinates between genome builds</h1>
+  <p class="hero-sub">Upload a PLINK .bim file, or a .vcf / .vcf.gz file, plus a UCSC chain file. Everything runs in your browser using the same block mapping logic as UCSC's liftOver tool, so your data never leaves your computer.</p>
+
+  <!-- STEP 1: build pair -->
+  <div class="card">
+    <div class="card-head"><div class="step-num">1</div><div class="card-title">Choose a conversion</div></div>
+    <div class="card-desc">Pick the source and target build.</div>
+    <div class="pair-grid" id="pairGrid"></div>
+  </div>
+
+  <!-- STEP 2: chain file -->
+  <div class="card">
+    <div class="card-head"><div class="step-num">2</div><div class="card-title">Add the UCSC chain file</div></div>
+    <div class="card-desc">Chain files hold the mapping data between builds. Download the one below, then drop it in. Both .chain and .chain.gz work.</div>
+    <div class="chain-link-row">
+      Get it from UCSC: <a id="chainLink" href="#" target="_blank" rel="noopener"></a>
+      <span>, subject to UCSC's non-commercial use terms.</span>
+    </div>
+    <div class="dropzone" id="chainDropzone">
+      <div class="dz-title">Drop chain file here, or click to browse</div>
+      <div>.chain or .chain.gz</div>
+      <input type="file" id="chainInput" accept=".chain,.gz">
+    </div>
+    <div id="chainFileOk" style="display:none;"></div>
+    <div id="chainWarn" class="warn" style="display:none;"></div>
+  </div>
+
+  <!-- STEP 3: variant file -->
+  <div class="card">
+    <div class="card-head"><div class="step-num">3</div><div class="card-title">Upload your .bim or .vcf file</div></div>
+    <div class="card-desc">Accepts a 6-column PLINK .bim, or a .vcf / .vcf.gz file. The format is detected automatically from the file name (or its contents, if the name is ambiguous).</div>
+    <div class="dropzone" id="bimDropzone">
+      <div class="dz-title">Drop file here, or click to browse</div>
+      <div>.bim, .vcf, or .vcf.gz</div>
+      <input type="file" id="bimInput" accept=".bim,.vcf,.gz,.txt">
+    </div>
+    <div id="bimFileOk" style="display:none;"></div>
+    <div id="bimWarn" class="warn" style="display:none;"></div>
+  </div>
+
+  <div class="action-bar">
+    <button class="run" id="runBtn" disabled>Run liftover</button>
+    <div class="progress-wrap" id="progressWrap"><div class="bar" id="progressBar"></div></div>
+    <div class="status-line" id="statusLine"></div>
+  </div>
+
+  <div class="error-banner" id="errorBanner"></div>
+
+  <div id="results">
+    <div class="card">
+      <div class="card-head"><div class="step-num">✓</div><div class="card-title" id="resultsTitle">Results</div></div>
+
+      <div class="stat-grid">
+        <div class="stat-card"><div class="val" id="statTotal">0</div><div class="lbl">Total variants</div></div>
+        <div class="stat-card mapped"><div class="val" id="statMapped">0</div><div class="lbl">Mapped</div></div>
+        <div class="stat-card unmapped"><div class="val" id="statUnmapped">0</div><div class="lbl">Unmapped</div></div>
+        <div class="stat-card"><div class="val" id="statPct">0%</div><div class="lbl">Mapping rate</div></div>
+      </div>
+
+      <div id="dataQualityNotice"></div>
+
+      <div class="chrom-chart" id="chromChart"></div>
+
+      <div class="downloads">
+        <a class="dl-btn primary" id="dlBim" href="#">Download lifted .bim</a>
+        <a class="dl-btn primary" id="dlVcf" href="#" style="display:none;">Download lifted .vcf</a>
+        <a class="dl-btn" id="dlVcfGz" href="#" style="display:none;">Download lifted .vcf.gz</a>
+        <a class="dl-btn" id="dlUnmapped" href="#">Download unmapped report</a>
+        <a class="dl-btn" id="dlExclude" href="#">Download PLINK exclude list</a>
+        <a class="dl-btn" id="dlKeep" href="#">Download PLINK keep list</a>
+        <a class="dl-btn" id="dlSummary" href="#">Download summary</a>
+      </div>
+
+      <div class="preview">
+        <div class="preview-title" id="previewTitle">Preview, first mapped rows</div>
+        <table id="previewTable"><thead><tr id="previewHeadRow"><th>Chr</th><th>ID</th><th>cM</th><th>New pos</th><th>A1</th><th>A2</th><th>Old pos</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    All parsing, chain block mapping, and file generation happens in JavaScript in your browser. Your genotype data is never transmitted anywhere.
+    Unmapped variants (falling in gaps, deletions, spanning an alignment block boundary, or landing on unplaced or alternate contigs) are excluded from the lifted output and listed separately, matching standard liftOver behavior.
+    For VCF input, structural variants and breakend records (symbolic ALT alleles like &lt;DEL&gt;, or ALT containing brackets) are not lifted by this tool and are reported as unmapped, since they need dedicated interval logic beyond simple coordinate remapping.
+    When a variant lands on a reverse-strand chain block, REF and ALT are reverse-complemented to stay correct for the new strand, but this tool does not have access to the target build's reference FASTA, so it cannot verify or correct REF against the new assembly the way Picard's LiftoverVcf does with a supplied dictionary. For anything going into a production pipeline, consider a spot-check against the target reference.
+    The downloadable .vcf.gz is standard gzip, readable directly by bcftools, vcftools, and most VCF-aware tools; if you need tabix/bgzip-style indexing, re-compress it with bgzip first.
+    Since a VCF record carries its own genotypes, a lifted VCF is self-contained. Unlike PLINK's .bed/.fam, there's no separate file to keep in sync.
+    UCSC chain files are property of The Regents of the University of California, made available for non-commercial research use. See the UCSC download page for terms.
+  </footer>
+</div>
+
+<script>
+(function(){
+
+  // ---------------- build pairs ----------------
+  const PAIRS = [
+    { key:'hg18_hg19', from:'hg18', to:'hg19', label:'hg18 to hg19', url:'https://hgdownload.soe.ucsc.edu/goldenPath/hg18/liftOver/hg18ToHg19.over.chain.gz', file:'hg18ToHg19.over.chain.gz' },
+    { key:'hg18_hg38', from:'hg18', to:'hg38', label:'hg18 to hg38', url:'https://hgdownload.soe.ucsc.edu/goldenPath/hg18/liftOver/hg18ToHg38.over.chain.gz', file:'hg18ToHg38.over.chain.gz' },
+    { key:'hg19_hg38', from:'hg19', to:'hg38', label:'hg19 to hg38', url:'https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz', file:'hg19ToHg38.over.chain.gz' },
+    { key:'hg38_hg19', from:'hg38', to:'hg19', label:'hg38 to hg19', url:'https://hgdownload.soe.ucsc.edu/goldenPath/hg38/liftOver/hg38ToHg19.over.chain.gz', file:'hg38ToHg19.over.chain.gz' }
+  ];
+  let currentPair = PAIRS[0];
+
+  const pairGrid = document.getElementById('pairGrid');
+  PAIRS.forEach(p=>{
+    const div = document.createElement('div');
+    div.className = 'pair-opt' + (p.key===currentPair.key ? ' active' : '');
+    div.dataset.key = p.key;
+    div.innerHTML = '<div class="name">' + p.from + ' &rarr; ' + p.to + '</div><div class="desc">' + p.file + '</div>';
+    div.addEventListener('click', ()=>selectPair(p.key));
+    pairGrid.appendChild(div);
+  });
+
+  function selectPair(key){
+    currentPair = PAIRS.find(p=>p.key===key);
+    document.querySelectorAll('.pair-opt').forEach(el=>{
+      el.classList.toggle('active', el.dataset.key===key);
+    });
+    const link = document.getElementById('chainLink');
+    link.href = currentPair.url;
+    link.textContent = currentPair.file;
+    if(chainState.loaded){
+      chainWarn.style.display='block';
+      chainWarn.textContent = 'Conversion changed. Make sure the chain file you loaded (' + (chainState.fileName||'') + ') actually goes from ' + currentPair.from + ' to ' + currentPair.to + '.';
+    }
+  }
+
+  // ---------------- shared dropzone wiring ----------------
+  function wireDropzone(zoneId, inputId, onFile){
+    const zone = document.getElementById(zoneId);
+    const input = document.getElementById(inputId);
+    zone.addEventListener('click', ()=>input.click());
+    input.addEventListener('change', e=>{ if(e.target.files[0]) onFile(e.target.files[0]); });
+    ['dragenter','dragover'].forEach(ev=>zone.addEventListener(ev, e=>{ e.preventDefault(); zone.classList.add('drag'); }));
+    ['dragleave','drop'].forEach(ev=>zone.addEventListener(ev, e=>{ e.preventDefault(); zone.classList.remove('drag'); }));
+    zone.addEventListener('drop', e=>{ const f = e.dataTransfer.files[0]; if(f) onFile(f); });
+  }
+
+  function fmtBytes(n){
+    if(n>1e6) return (n/1e6).toFixed(1)+' MB';
+    if(n>1e3) return (n/1e3).toFixed(1)+' KB';
+    return n+' B';
+  }
+
+  // Reads a file as text, auto-detecting gzip by magic bytes (not just filename),
+  // so a renamed or extension-less gzip file still works, and a mislabeled .gz
+  // plain-text file still works too.
+  function readFileAsText(file, callback){
+    const reader = new FileReader();
+    reader.onerror = ()=>callback(new Error('Could not read the file (browser file read error).'));
+    reader.onload = (e)=>{
+      try{
+        const buf = new Uint8Array(e.target.result);
+        const looksGzip = buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b;
+        let text;
+        if(looksGzip){
+          if(typeof pako === 'undefined'){
+            callback(new Error('This looks gzip-compressed but the decompression library did not load. Check your internet connection and reload the page.'));
+            return;
+          }
+          text = pako.inflate(buf, { to: 'string' });
+        } else {
+          text = new TextDecoder('utf-8').decode(buf);
+        }
+        callback(null, text, looksGzip);
+      } catch(err){
+        callback(new Error('Could not decode this file: ' + err.message));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // ================= CHAIN FILE HANDLING =================
+  const chainWarn = document.getElementById('chainWarn');
+  const chainFileOk = document.getElementById('chainFileOk');
+  const chainState = { loaded:false, chromIntervals:null, chainCount:0, fileName:'' };
+
+  function normalizeChromKey(nameRaw){
+    let s = nameRaw.toString().trim().toUpperCase();
+    if(s.startsWith('CHR')) s = s.slice(3);
+    if(s === '23') s = 'X';
+    else if(s === '24') s = 'Y';
+    else if(s === '25') s = 'X';
+    else if(s === '26' || s === 'MT') s = 'M';
+    return s;
+  }
+
+  function parseChainText(text){
+    const lines = text.split('\n');
+    const chromIntervals = {};
+    let cur = null;
+    let chainCount = 0;
+    for(let li=0; li<lines.length; li++){
+      const raw = lines[li];
+      if(!raw) { cur = null; continue; }
+      const line = raw.trim();
+      if(line.length === 0){ cur = null; continue; }
+      if(line.startsWith('chain')){
+        const f = line.split(/\s+/);
+        const tName = f[2], tStart = parseInt(f[5],10);
+        const qName = f[7], qSize = parseInt(f[8],10), qStrand = f[9], qStart = parseInt(f[10],10);
+        const score = parseFloat(f[1]) || 0;
+        const tKey = normalizeChromKey(tName);
+        const qKeyRaw = qName.replace(/^chr/i,'');
+        if(!chromIntervals[tKey]) chromIntervals[tKey] = [];
+        cur = { tKey, tPos: tStart, qName, qSize, qStrand, qPos: qStart, score, qKeyRaw };
+        chainCount++;
+        continue;
+      }
+      if(!cur) continue;
+      const parts = line.split(/\s+/);
+      const size = parseInt(parts[0],10);
+      if(!Number.isFinite(size)) continue;
+      const dt = parts.length>1 ? parseInt(parts[1],10) : 0;
+      const dq = parts.length>2 ? parseInt(parts[2],10) : 0;
+      chromIntervals[cur.tKey].push({
+        tStart: cur.tPos, tEnd: cur.tPos + size,
+        qStart: cur.qPos, qStrand: cur.qStrand, qSize: cur.qSize,
+        qChrRaw: cur.qKeyRaw, score: cur.score
+      });
+      cur.tPos += size + (Number.isFinite(dt)?dt:0);
+      cur.qPos += size + (Number.isFinite(dq)?dq:0);
+    }
+    for(const k in chromIntervals){
+      chromIntervals[k].sort((a,b)=>a.tStart - b.tStart);
+      chromIntervals[k] = resolveOverlaps(chromIntervals[k]);
+    }
+    return { chromIntervals, chainCount };
+  }
+
+  // Standard .over.chain files are single-coverage on the target side, but
+  // some chain sets (or hand-edited ones) can contain overlapping blocks.
+  // When that happens, prefer the higher-scoring chain for the overlapping
+  // region instead of letting the earlier one win arbitrarily.
+  function resolveOverlaps(sorted){
+    if(sorted.length < 2) return sorted;
+    const result = [sorted[0]];
+    for(let i=1;i<sorted.length;i++){
+      const prev = result[result.length-1];
+      const cur = sorted[i];
+      if(cur.tStart >= prev.tEnd){
+        result.push(cur);
+        continue;
+      }
+      if(cur.score > prev.score){
+        if(cur.tStart <= prev.tStart){
+          result[result.length-1] = cur;
+        } else {
+          prev.tEnd = cur.tStart;
+          result.push(cur);
+        }
+      } else {
+        if(cur.tEnd <= prev.tEnd){
+          continue;
+        }
+        const delta = prev.tEnd - cur.tStart;
+        cur.tStart = prev.tEnd;
+        cur.qStart = cur.qStart + delta;
+        result.push(cur);
+      }
+    }
+    return result;
+  }
+
+  function findInterval(arr, pos0){
+    let lo=0, hi=arr.length-1;
+    while(lo<=hi){
+      const mid=(lo+hi)>>1;
+      const iv = arr[mid];
+      if(pos0 < iv.tStart) hi = mid-1;
+      else if(pos0 >= iv.tEnd) lo = mid+1;
+      else return iv;
+    }
+    return null;
+  }
+
+  function loadChainFile(file){
+    chainWarn.style.display = 'none';
+    chainFileOk.style.display = 'none';
+    chainState.loaded = false;
+    chainState.fileName = file.name;
+    readFileAsText(file, (err, text)=>{
+      if(err){
+        chainWarn.style.display='block';
+        chainWarn.textContent = err.message;
+        return;
+      }
+      try{
+        const { chromIntervals, chainCount } = parseChainText(text);
+        if(chainCount === 0){
+          chainWarn.style.display='block';
+          chainWarn.textContent = 'No chain blocks found. Is this a valid .chain file?';
+          return;
+        }
+        chainState.chromIntervals = chromIntervals;
+        chainState.chainCount = chainCount;
+        chainState.loaded = true;
+        const chromCount = Object.keys(chromIntervals).length;
+        chainFileOk.style.display = 'flex';
+        chainFileOk.className = 'file-ok';
+        chainFileOk.innerHTML = '<span>' + file.name + '</span><span class="file-meta">' + fmtBytes(file.size) + ', ' + chainCount + ' chains, ' + chromCount + ' chromosomes</span><span class="clear" id="chainClear">remove</span>';
+        document.getElementById('chainClear').addEventListener('click', (ev)=>{ ev.stopPropagation(); chainState.loaded=false; chainFileOk.style.display='none'; updateRunButton(); });
+        updateRunButton();
+      } catch(parseErr){
+        chainWarn.style.display='block';
+        chainWarn.textContent = 'Failed to parse chain file (format error): ' + parseErr.message;
+      }
+    });
+  }
+
+  wireDropzone('chainDropzone','chainInput', loadChainFile);
+
+  // ================= VARIANT FILE HANDLING (.bim or .vcf/.vcf.gz) =================
+  const bimWarn = document.getElementById('bimWarn');
+  const bimFileOk = document.getElementById('bimFileOk');
+  // fileState holds whichever format was uploaded; `mode` drives everything downstream.
+  const fileState = { loaded:false, mode:null, fileName:'', rows:null, vcf:null };
+
+  function detectMode(filename, text){
+    if(/\.vcf(\.gz)?$/i.test(filename)) return 'vcf';
+    if(/\.bim$/i.test(filename)) return 'bim';
+    // ambiguous extension (e.g. .txt): sniff the content
+    const head = text.slice(0, 2000);
+    if(/^##fileformat=VCF/im.test(head) || /^#CHROM\t/im.test(head)) return 'vcf';
+    return 'bim';
+  }
+
+  function parseBimText(text){
+    const lines = text.split('\n');
+    const rows = [];
+    let malformed = 0;
+    const seenIds = new Set();
+    let duplicateIds = 0;
+    for(let i=0;i<lines.length;i++){
+      const l = lines[i].trim();
+      if(l.length===0) continue;
+      const f = l.split(/\s+/);
+      if(f.length < 6){ malformed++; continue; }
+      const pos = parseInt(f[3],10);
+      if(!Number.isFinite(pos)){ malformed++; continue; }
+      if(seenIds.has(f[1])) duplicateIds++; else seenIds.add(f[1]);
+      rows.push({ chr: f[0], id: f[1], cm: f[2], pos: pos, a1: f[4], a2: f[5] });
+    }
+    return { rows, malformed, duplicateIds };
+  }
+
+  // Parses a VCF into header lines (kept for passthrough, minus ##contig
+  // lines which describe the wrong assembly after lifting) and raw data
+  // line strings, which are lifted without fully tokenizing every sample
+  // column, since we only ever need to rewrite CHROM/POS/REF/ALT.
+  function parseVcfText(text){
+    const lines = text.split('\n');
+    const headerLines = [];
+    const dataLines = [];
+    let contigLinesRemoved = 0;
+    let malformed = 0;
+    for(let i=0;i<lines.length;i++){
+      let l = lines[i];
+      if(l.length === 0) continue;
+      if(l[l.length-1] === '\r') l = l.slice(0,-1);
+      if(l.length === 0) continue;
+      if(l[0] === '#'){
+        if(/^##contig=/i.test(l)){ contigLinesRemoved++; continue; }
+        headerLines.push(l);
+        continue;
+      }
+      let tabCount = 0;
+      for(let c=0;c<l.length && tabCount<4;c++){ if(l.charCodeAt(c)===9) tabCount++; }
+      if(tabCount < 4){ malformed++; continue; }
+      dataLines.push(l);
+    }
+    return { headerLines, dataLines, contigLinesRemoved, malformed };
+  }
+
+  function loadVariantFile(file){
+    bimWarn.style.display='none';
+    bimFileOk.style.display='none';
+    const oldNotice = document.getElementById('bimNotice');
+    if(oldNotice) oldNotice.remove();
+    fileState.loaded = false;
+    fileState.fileName = file.name;
+    readFileAsText(file, (err, text)=>{
+      if(err){
+        bimWarn.style.display='block';
+        bimWarn.textContent = err.message;
+        return;
+      }
+      try{
+        const mode = detectMode(file.name, text);
+        fileState.mode = mode;
+        let countLabel, noticeParts = [];
+
+        if(mode === 'bim'){
+          const { rows, malformed, duplicateIds } = parseBimText(text);
+          if(rows.length === 0){
+            bimWarn.style.display='block';
+            bimWarn.textContent = 'No valid .bim rows found. Expected 6 whitespace-separated columns per line.';
+            return;
+          }
+          fileState.rows = rows;
+          fileState.vcf = null;
+          countLabel = rows.length.toLocaleString() + ' variants (.bim)';
+          if(malformed > 0) noticeParts.push(malformed.toLocaleString() + ' line(s) skipped for having fewer than 6 columns or an invalid position');
+          if(duplicateIds > 0) noticeParts.push(duplicateIds.toLocaleString() + ' duplicate variant ID(s) found, which PLINK will also flag downstream');
+        } else {
+          const { headerLines, dataLines, contigLinesRemoved, malformed } = parseVcfText(text);
+          if(dataLines.length === 0){
+            bimWarn.style.display='block';
+            bimWarn.textContent = 'No valid VCF data rows found. Make sure this is a standard VCF with a #CHROM header line.';
+            return;
+          }
+          const hasChromHeader = headerLines.some(l=>/^#CHROM\t/i.test(l));
+          if(!hasChromHeader){
+            bimWarn.style.display='block';
+            bimWarn.textContent = 'No #CHROM header row found. This does not look like a well-formed VCF.';
+            return;
+          }
+          fileState.rows = null;
+          fileState.vcf = { headerLines, dataLines };
+          countLabel = dataLines.length.toLocaleString() + ' records (VCF)';
+          if(malformed > 0) noticeParts.push(malformed.toLocaleString() + ' line(s) skipped for having fewer than 5 columns');
+          if(contigLinesRemoved > 0) noticeParts.push(contigLinesRemoved.toLocaleString() + ' ##contig header line(s) will be dropped, since they describe ' + currentPair.from + ' and would be stale after lifting to ' + currentPair.to);
+        }
+
+        fileState.loaded = true;
+        bimFileOk.style.display='flex';
+        bimFileOk.className = 'file-ok';
+        bimFileOk.innerHTML = '<span>' + file.name + '</span><span class="file-meta">' + fmtBytes(file.size) + ', ' + countLabel + '</span><span class="clear" id="bimClear">remove</span>';
+        document.getElementById('bimClear').addEventListener('click', (ev)=>{ ev.stopPropagation(); fileState.loaded=false; bimFileOk.style.display='none'; updateRunButton(); });
+        if(noticeParts.length > 0){
+          const notice = document.createElement('div');
+          notice.className = 'notice';
+          notice.id = 'bimNotice';
+          notice.textContent = noticeParts.join('. ') + '.';
+          bimFileOk.insertAdjacentElement('afterend', notice);
+        }
+        updateRunButton();
+      } catch(parseErr){
+        bimWarn.style.display='block';
+        bimWarn.textContent = 'Failed to parse file: ' + parseErr.message;
+      }
+    });
+  }
+
+  wireDropzone('bimDropzone','bimInput', loadVariantFile);
+
+  // ================= RUN BUTTON =================
+  const runBtn = document.getElementById('runBtn');
+  const statusLine = document.getElementById('statusLine');
+  function updateRunButton(){
+    runBtn.disabled = !(chainState.loaded && fileState.loaded);
+  }
+
+  function keyToPlinkChr(key){
+    if(key==='X') return '23';
+    if(key==='Y') return '24';
+    if(key==='M') return '26';
+    if(/^\d+$/.test(key)) return key;
+    return null; // alt, random, or unplaced contig
+  }
+
+  function liftRow(row, chromIntervals){
+    const origCode = row.chr.toString().trim();
+    if(origCode === '0'){
+      return { status:'unmapped', reason:'no chromosome assigned (chr0)' };
+    }
+    const key = normalizeChromKey(origCode);
+    const arr = chromIntervals[key];
+    if(!arr){
+      return { status:'unmapped', reason:'no chain data for chromosome ' + origCode };
+    }
+    if(!Number.isFinite(row.pos)){
+      return { status:'unmapped', reason:'invalid position' };
+    }
+    const pos0 = row.pos - 1;
+    const iv = findInterval(arr, pos0);
+    if(!iv){
+      return { status:'unmapped', reason:'position falls in an unaligned or deleted region' };
+    }
+    const offset = pos0 - iv.tStart;
+    let qPos0;
+    if(iv.qStrand === '+') qPos0 = iv.qStart + offset;
+    else qPos0 = iv.qSize - (iv.qStart + offset) - 1;
+    const qKey = normalizeChromKey(iv.qChrRaw);
+    const outChr = (origCode === '25') ? '25' : keyToPlinkChr(qKey);
+    if(outChr === null){
+      return { status:'unmapped', reason:'target maps to an alternate or unplaced contig (' + iv.qChrRaw + ')' };
+    }
+    return { status:'mapped', chr: outChr, pos: qPos0 + 1 };
+  }
+
+  // ---------------- VCF-specific lifting helpers ----------------
+  const SYMBOLIC_ALT_RE = /^<.+>$/;
+  function isSymbolicOrBreakend(altField){
+    const alts = altField.split(',');
+    for(let i=0;i<alts.length;i++){
+      const a = alts[i];
+      if(a === '*') return true;
+      if(SYMBOLIC_ALT_RE.test(a)) return true;
+      if(a.indexOf('[') !== -1 || a.indexOf(']') !== -1) return true;
+    }
+    return false;
+  }
+
+  const COMP_MAP = {A:'T',T:'A',C:'G',G:'C',N:'N',a:'t',t:'a',c:'g',g:'c',n:'n'};
+  function revcomp(seq){
+    let out = '';
+    for(let i=seq.length-1;i>=0;i--){
+      const ch = seq[i];
+      const m = COMP_MAP[ch];
+      out += (m !== undefined) ? m : ch;
+    }
+    return out;
+  }
+
+  function formatOutputChrom(origChrom, qChrRaw){
+    const hadChrPrefix = /^chr/i.test(origChrom);
+    const origCore = origChrom.replace(/^chr/i,'');
+    let core = qChrRaw;
+    if(core === 'M'){
+      core = /^MT$/i.test(origCore) ? 'MT' : 'M';
+    }
+    return hadChrPrefix ? ('chr'+core) : core;
+  }
+
+  // Splits a raw VCF data line into its first 5 fields (which liftover can
+  // touch) plus the untouched remainder (QUAL onward, including all sample
+  // genotype columns), so wide multi-sample files don't need full tokenizing.
+  function splitVcfLine(line){
+    const idx = [];
+    let pos = -1;
+    for(let k=0;k<5;k++){
+      pos = line.indexOf('\t', pos+1);
+      if(pos === -1) return null;
+      idx.push(pos);
+    }
+    return {
+      chrom: line.slice(0, idx[0]),
+      pos: parseInt(line.slice(idx[0]+1, idx[1]), 10),
+      id: line.slice(idx[1]+1, idx[2]),
+      ref: line.slice(idx[2]+1, idx[3]),
+      alt: line.slice(idx[3]+1, idx[4]),
+      rest: line.slice(idx[4]+1)
+    };
+  }
+
+  function liftVcfFields(fields, chromIntervals){
+    const origChrom = fields.chrom;
+    const key = normalizeChromKey(origChrom);
+    const arr = chromIntervals[key];
+    if(!arr) return { status:'unmapped', reason:'no chain data for chromosome ' + origChrom };
+    if(!Number.isFinite(fields.pos)) return { status:'unmapped', reason:'invalid POS' };
+    if(isSymbolicOrBreakend(fields.alt)) return { status:'unmapped', reason:'structural or breakend ALT not supported by coordinate liftover' };
+
+    const refLen = fields.ref.length || 1;
+    const p0start = fields.pos - 1;
+    const p0end = p0start + refLen - 1;
+    const iv = findInterval(arr, p0start);
+    if(!iv) return { status:'unmapped', reason:'position falls in an unaligned or deleted region' };
+    if(p0end >= iv.tEnd) return { status:'unmapped', reason:'REF allele spans an alignment block boundary' };
+
+    function mapPlus(p0){
+      const offset = p0 - iv.tStart;
+      return iv.qStrand === '+' ? (iv.qStart + offset) : (iv.qSize - (iv.qStart + offset) - 1);
+    }
+
+    let newStart0, strandFlip;
+    if(iv.qStrand === '+'){
+      newStart0 = mapPlus(p0start);
+      strandFlip = false;
+    } else {
+      newStart0 = mapPlus(p0end);
+      strandFlip = true;
+    }
+
+    const qKey = normalizeChromKey(iv.qChrRaw);
+    if(!/^([0-9]+|X|Y|M)$/.test(qKey)){
+      return { status:'unmapped', reason:'target maps to an alternate or unplaced contig (' + iv.qChrRaw + ')' };
+    }
+    const outChrom = formatOutputChrom(origChrom, iv.qChrRaw);
+
+    let newRef = fields.ref, newAlt = fields.alt;
+    if(strandFlip){
+      newRef = revcomp(fields.ref);
+      newAlt = fields.alt.split(',').map(revcomp).join(',');
+    }
+
+    return { status:'mapped', chrom: outChrom, pos: newStart0+1, ref:newRef, alt:newAlt, strandFlip };
+  }
+
+  function chromSortRank(chromStr){
+    const core = chromStr.replace(/^chr/i,'').toUpperCase();
+    if(/^\d+$/.test(core)) return [0, parseInt(core,10)];
+    if(core==='X') return [0, 23];
+    if(core==='Y') return [0, 24];
+    if(core==='M' || core==='MT') return [0, 25];
+    return [1, core];
+  }
+  function compareChromPos(a,b){
+    const ra = chromSortRank(a.chrom), rb = chromSortRank(b.chrom);
+    if(ra[0] !== rb[0]) return ra[0]-rb[0];
+    if(typeof ra[1] === 'number' && typeof rb[1] === 'number'){
+      if(ra[1] !== rb[1]) return ra[1]-rb[1];
+    } else {
+      const c = String(ra[1]).localeCompare(String(rb[1]));
+      if(c !== 0) return c;
+    }
+    return a.pos - b.pos;
+  }
+
+  function setDownloadLink(el, filename, content, mimeType){
+    el.addEventListener('click', function(ev){
+      ev.preventDefault();
+      const blob = new Blob([content], { type: mimeType || 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url), 2000);
+    }, { once:false });
+  }
+
+  runBtn.addEventListener('click', function(){
+    try{
+      runBtn.disabled = true;
+      document.getElementById('errorBanner').style.display = 'none';
+      document.getElementById('progressWrap').style.display = 'block';
+      statusLine.textContent = 'Starting...';
+      if(fileState.mode === 'vcf') runVcfLiftoverChunked();
+      else runBimLiftoverChunked();
+    } catch(err){
+      showFatalError(err);
+    }
+  });
+
+  function showFatalError(err){
+    const banner = document.getElementById('errorBanner');
+    banner.style.display = 'block';
+    banner.textContent = 'Something went wrong while running the liftover: ' + (err && err.message ? err.message : err) + '. Your files were not modified; try again or use a different chain/input file.';
+    runBtn.disabled = false;
+    document.getElementById('progressWrap').style.display = 'none';
+    statusLine.textContent = '';
+  }
+
+  // Roughly the max plausible base-pair position on any current human
+  // chromosome (chr1 is ~249 Mb in GRCh38, the largest). Anything well past
+  // this on an autosome usually means the wrong source build was assumed.
+  const PLAUSIBLE_MAX_POS = 260000000;
+
+  function resetDownloadButtons(mode){
+    const dlBim = document.getElementById('dlBim');
+    const dlVcf = document.getElementById('dlVcf');
+    const dlVcfGz = document.getElementById('dlVcfGz');
+    const dlExclude = document.getElementById('dlExclude');
+    const dlKeep = document.getElementById('dlKeep');
+    dlBim.style.display = (mode==='bim') ? 'inline-flex' : 'none';
+    dlVcf.style.display = (mode==='vcf') ? 'inline-flex' : 'none';
+    dlVcfGz.style.display = (mode==='vcf') ? 'inline-flex' : 'none';
+    dlExclude.style.display = (mode==='bim') ? 'inline-flex' : 'none';
+    dlKeep.style.display = (mode==='bim') ? 'inline-flex' : 'none';
+  }
+
+  function renderChromChart(perChrom){
+    const chart = document.getElementById('chromChart');
+    chart.innerHTML = '';
+    const order = Object.keys(perChrom).sort((a,b)=>{
+      const na = parseInt(a,10), nb = parseInt(b,10);
+      if(Number.isFinite(na) && Number.isFinite(nb)) return na-nb;
+      return a.localeCompare(b);
+    });
+    order.forEach(k=>{
+      const c = perChrom[k];
+      const total = c.mapped + c.unmapped;
+      const pctMapped = total ? (c.mapped/total*100) : 0;
+      const row = document.createElement('div');
+      row.className = 'chrom-row';
+      row.innerHTML =
+        '<div class="clabel">' + k + '</div>' +
+        '<div class="bar"><div class="fill-mapped" style="width:' + pctMapped + '%"></div><div class="fill-unmapped" style="left:' + pctMapped + '%; width:' + (100-pctMapped) + '%"></div></div>' +
+        '<div class="count">' + total.toLocaleString() + '</div>';
+      chart.appendChild(row);
+    });
+  }
+
+  function renderStats(total, mapped, unmapped){
+    const pct = total ? ((mapped/total)*100).toFixed(2) : '0.00';
+    document.getElementById('statTotal').textContent = total.toLocaleString();
+    document.getElementById('statMapped').textContent = mapped.toLocaleString();
+    document.getElementById('statUnmapped').textContent = unmapped.toLocaleString();
+    document.getElementById('statPct').textContent = pct + '%';
+    return pct;
+  }
+
+  function finishCommon(){
+    document.getElementById('results').style.display = 'block';
+    const resultsEl = document.getElementById('results');
+    if(typeof resultsEl.scrollIntoView === 'function'){
+      try{ resultsEl.scrollIntoView({ behavior:'smooth', block:'start' }); }catch(scrollErr){ /* non-critical */ }
+    }
+    document.getElementById('progressWrap').style.display = 'none';
+    runBtn.disabled = false;
+  }
+
+  // ================= BIM MODE =================
+  function runBimLiftoverChunked(){
+    const rows = fileState.rows;
+    const chromIntervals = chainState.chromIntervals;
+    const CHUNK = 25000;
+    let i = 0;
+
+    const mappedLines = [];
+    const unmappedLines = [ ['chr','id','cm','pos_source','a1','a2','reason'].join('\t') ];
+    const excludeIds = [];
+    const keepIds = [];
+    const previewRows = [];
+    const perChrom = {};
+    let suspiciousPos = 0;
+
+    const progressBar = document.getElementById('progressBar');
+
+    function step(){
+      try{
+        const end = Math.min(i + CHUNK, rows.length);
+        for(; i<end; i++){
+          const row = rows[i];
+          const bucket = 'chr' + row.chr.toString();
+          if(!perChrom[bucket]) perChrom[bucket] = { mapped:0, unmapped:0 };
+          if(Number.isFinite(row.pos) && row.pos > PLAUSIBLE_MAX_POS) suspiciousPos++;
+          const result = liftRow(row, chromIntervals);
+          if(result.status === 'mapped'){
+            mappedLines.push([result.chr, row.id, row.cm, result.pos, row.a1, row.a2].join('\t'));
+            keepIds.push(row.id);
+            perChrom[bucket].mapped++;
+            if(previewRows.length < 12){
+              previewRows.push([result.chr, row.id, row.cm, result.pos, row.a1, row.a2, row.pos]);
+            }
+          } else {
+            unmappedLines.push([row.chr, row.id, row.cm, row.pos, row.a1, row.a2, result.reason].join('\t'));
+            excludeIds.push(row.id);
+            perChrom[bucket].unmapped++;
+          }
+        }
+        const pct = Math.round((i/rows.length)*100);
+        progressBar.style.width = pct + '%';
+        statusLine.textContent = 'Lifting variants... ' + i.toLocaleString() + ' of ' + rows.length.toLocaleString();
+        if(i < rows.length) setTimeout(step, 0);
+        else finish();
+      } catch(err){
+        showFatalError(err);
+      }
+    }
+
+    function finish(){
+      const totalMapped = mappedLines.length;
+      const totalUnmapped = rows.length - totalMapped;
+      const pct = renderStats(rows.length, totalMapped, totalUnmapped);
+
+      document.getElementById('resultsTitle').textContent = 'Results: ' + currentPair.from + ' to ' + currentPair.to;
+
+      const qualityDiv = document.getElementById('dataQualityNotice');
+      qualityDiv.innerHTML = '';
+      if(suspiciousPos > 0){
+        const n = document.createElement('div');
+        n.className = 'notice';
+        n.style.marginLeft = '0'; n.style.marginBottom = '14px';
+        n.textContent = suspiciousPos.toLocaleString() + ' variant(s) had a position beyond any known human chromosome length. Double check that ' + currentPair.from + ' is really the build your file is in.';
+        qualityDiv.appendChild(n);
+      }
+
+      renderChromChart(perChrom);
+
+      document.getElementById('previewTitle').textContent = 'Preview, first mapped rows';
+      document.getElementById('previewHeadRow').innerHTML = '<th>Chr</th><th>ID</th><th>cM</th><th>New pos</th><th>A1</th><th>A2</th><th>Old pos</th>';
+      const tbody = document.querySelector('#previewTable tbody');
+      tbody.innerHTML = '';
+      previewRows.forEach(r=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = r.map(v=>'<td>'+v+'</td>').join('');
+        tbody.appendChild(tr);
+      });
+
+      const summary = [
+        'PLINK .bim LiftOver summary',
+        '============================',
+        'Source build: ' + currentPair.from,
+        'Target build: ' + currentPair.to,
+        'Chain file:   ' + chainState.fileName + ' (' + chainState.chainCount + ' chains)',
+        'Input file:   ' + fileState.fileName,
+        '',
+        'Total variants:  ' + rows.length,
+        'Mapped:          ' + totalMapped + ' (' + pct + '%)',
+        'Unmapped:        ' + totalUnmapped,
+        '',
+        'Per-chromosome breakdown (source chromosome code):',
+        ...Object.keys(perChrom).sort((a,b)=>{
+          const na = parseInt(a.replace('chr',''),10), nb = parseInt(b.replace('chr',''),10);
+          if(Number.isFinite(na) && Number.isFinite(nb)) return na-nb;
+          return a.localeCompare(b);
+        }).map(k => '  ' + k.padEnd(6) + ' mapped: ' + String(perChrom[k].mapped).padStart(8) + '   unmapped: ' + String(perChrom[k].unmapped).padStart(8)),
+        '',
+        'Downstream note: your .bed and .fam files still contain every original',
+        'variant/genotype in their original order. Use the PLINK exclude list',
+        '(or keep list) from this page with plink --exclude / --extract before',
+        'swapping in the lifted .bim, so all three files stay in sync.'
+      ].join('\n');
+
+      const baseName = fileState.fileName.replace(/\.bim$/i,'');
+      resetDownloadButtons('bim');
+      setDownloadLink(document.getElementById('dlBim'), baseName + '.' + currentPair.to + '.bim', mappedLines.join('\n') + '\n');
+      setDownloadLink(document.getElementById('dlUnmapped'), baseName + '.' + currentPair.to + '.unmapped.tsv', unmappedLines.join('\n') + '\n');
+      setDownloadLink(document.getElementById('dlExclude'), baseName + '.exclude.txt', excludeIds.join('\n') + (excludeIds.length? '\n':''));
+      setDownloadLink(document.getElementById('dlKeep'), baseName + '.keep.txt', keepIds.join('\n') + (keepIds.length? '\n':''));
+      setDownloadLink(document.getElementById('dlSummary'), baseName + '.' + currentPair.to + '.liftover_summary.txt', summary);
+
+      finishCommon();
+      statusLine.textContent = 'Done. ' + totalMapped.toLocaleString() + ' of ' + rows.length.toLocaleString() + ' variants mapped.';
+    }
+
+    setTimeout(step, 10);
+  }
+
+  // ================= VCF MODE =================
+  function runVcfLiftoverChunked(){
+    const dataLines = fileState.vcf.dataLines;
+    const headerLines = fileState.vcf.headerLines;
+    const chromIntervals = chainState.chromIntervals;
+    const CHUNK = 20000;
+    let i = 0;
+
+    const mappedRecords = []; // {chrom,pos,line}
+    const unmappedLines = [ ['chrom','pos','id','ref','alt','reason'].join('\t') ];
+    const previewRows = [];
+    const perChrom = {};
+    let suspiciousPos = 0;
+    let strandFlips = 0;
+
+    const progressBar = document.getElementById('progressBar');
+
+    function step(){
+      try{
+        const end = Math.min(i + CHUNK, dataLines.length);
+        for(; i<end; i++){
+          const line = dataLines[i];
+          const fields = splitVcfLine(line);
+          if(!fields){
+            unmappedLines.push(['?','?','?','?','?','malformed data line (fewer than 5 tab-separated fields)'].join('\t'));
+            continue;
+          }
+          const bucket = /^chr/i.test(fields.chrom) ? fields.chrom : ('chr'+fields.chrom);
+          if(!perChrom[bucket]) perChrom[bucket] = { mapped:0, unmapped:0 };
+          if(Number.isFinite(fields.pos) && fields.pos > PLAUSIBLE_MAX_POS) suspiciousPos++;
+
+          const result = liftVcfFields(fields, chromIntervals);
+          if(result.status === 'mapped'){
+            const newLine = result.chrom + '\t' + result.pos + '\t' + fields.id + '\t' + result.ref + '\t' + result.alt + '\t' + fields.rest;
+            mappedRecords.push({ chrom: result.chrom, pos: result.pos, line: newLine });
+            perChrom[bucket].mapped++;
+            if(result.strandFlip) strandFlips++;
+            if(previewRows.length < 12){
+              previewRows.push([result.chrom, result.pos, fields.id, result.ref, result.alt, fields.pos, result.strandFlip ? 'yes' : 'no']);
+            }
+          } else {
+            unmappedLines.push([fields.chrom, fields.pos, fields.id, fields.ref, fields.alt, result.reason].join('\t'));
+            perChrom[bucket].unmapped++;
+          }
+        }
+        const pct = Math.round((i/dataLines.length)*100);
+        progressBar.style.width = pct + '%';
+        statusLine.textContent = 'Lifting records... ' + i.toLocaleString() + ' of ' + dataLines.length.toLocaleString();
+        if(i < dataLines.length) setTimeout(step, 0);
+        else { statusLine.textContent = 'Sorting output...'; setTimeout(finish, 10); }
+      } catch(err){
+        showFatalError(err);
+      }
+    }
+
+    function finish(){
+      try{
+        mappedRecords.sort(compareChromPos);
+
+        const totalMapped = mappedRecords.length;
+        const totalUnmapped = dataLines.length - totalMapped;
+        const pct = renderStats(dataLines.length, totalMapped, totalUnmapped);
+
+        document.getElementById('resultsTitle').textContent = 'Results: ' + currentPair.from + ' to ' + currentPair.to;
+
+        const qualityDiv = document.getElementById('dataQualityNotice');
+        qualityDiv.innerHTML = '';
+        const notices = [];
+        if(suspiciousPos > 0) notices.push(suspiciousPos.toLocaleString() + ' record(s) had a POS beyond any known human chromosome length. Double check that ' + currentPair.from + ' is really the build your VCF is in.');
+        if(strandFlips > 0) notices.push(strandFlips.toLocaleString() + ' record(s) landed on a reverse-strand chain block; REF/ALT were reverse-complemented to match.');
+        notices.forEach(txt=>{
+          const n = document.createElement('div');
+          n.className = 'notice';
+          n.style.marginLeft = '0'; n.style.marginBottom = '10px';
+          n.textContent = txt;
+          qualityDiv.appendChild(n);
+        });
+
+        renderChromChart(perChrom);
+
+        document.getElementById('previewTitle').textContent = 'Preview, first mapped records';
+        document.getElementById('previewHeadRow').innerHTML = '<th>Chrom</th><th>Pos</th><th>ID</th><th>Ref</th><th>Alt</th><th>Old pos</th><th>Strand flip</th>';
+        const tbody = document.querySelector('#previewTable tbody');
+        tbody.innerHTML = '';
+        previewRows.forEach(r=>{
+          const tr = document.createElement('tr');
+          tr.innerHTML = r.map(v=>'<td>'+v+'</td>').join('');
+          tbody.appendChild(tr);
+        });
+
+        // Build final VCF: header lines (contig lines already stripped),
+        // a provenance line inserted just before #CHROM, then sorted records.
+        const provenance = '##liftover=' + currentPair.from + 'To' + currentPair.to.charAt(0).toUpperCase() + currentPair.to.slice(1) +
+          ',chain=' + chainState.fileName + ',tool=browser-liftover,date=' + new Date().toISOString().slice(0,10);
+        const outHeader = [];
+        let inserted = false;
+        for(let h=0; h<headerLines.length; h++){
+          if(!inserted && /^#CHROM\t/i.test(headerLines[h])){
+            outHeader.push(provenance);
+            inserted = true;
+          }
+          outHeader.push(headerLines[h]);
+        }
+        if(!inserted) outHeader.push(provenance);
+
+        const bodyLines = mappedRecords.map(r=>r.line);
+        const vcfText = outHeader.join('\n') + '\n' + bodyLines.join('\n') + (bodyLines.length ? '\n' : '');
+
+        const baseName = fileState.fileName.replace(/\.vcf(\.gz)?$/i,'');
+        resetDownloadButtons('vcf');
+        setDownloadLink(document.getElementById('dlVcf'), baseName + '.' + currentPair.to + '.vcf', vcfText, 'text/plain');
+
+        const dlVcfGz = document.getElementById('dlVcfGz');
+        dlVcfGz.addEventListener('click', function(ev){
+          ev.preventDefault();
+          try{
+            const gzBytes = pako.gzip(vcfText);
+            const blob = new Blob([gzBytes], { type: 'application/gzip' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = baseName + '.' + currentPair.to + '.vcf.gz';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(()=>URL.revokeObjectURL(url), 2000);
+          } catch(gzErr){
+            showFatalError(new Error('Could not gzip the output: ' + gzErr.message));
+          }
+        });
+
+        setDownloadLink(document.getElementById('dlUnmapped'), baseName + '.' + currentPair.to + '.unmapped.tsv', unmappedLines.join('\n') + '\n');
+
+        const summary = [
+          'VCF LiftOver summary',
+          '============================',
+          'Source build: ' + currentPair.from,
+          'Target build: ' + currentPair.to,
+          'Chain file:   ' + chainState.fileName + ' (' + chainState.chainCount + ' chains)',
+          'Input file:   ' + fileState.fileName,
+          '',
+          'Total records:   ' + dataLines.length,
+          'Mapped:          ' + totalMapped + ' (' + pct + '%)',
+          'Unmapped:        ' + totalUnmapped,
+          'Strand flips:    ' + strandFlips,
+          '',
+          'Per-chromosome breakdown (source chromosome name):',
+          ...Object.keys(perChrom).sort((a,b)=>{
+            const ra = chromSortRank(a), rb = chromSortRank(b);
+            if(ra[0]!==rb[0]) return ra[0]-rb[0];
+            if(typeof ra[1]==='number' && typeof rb[1]==='number') return ra[1]-rb[1];
+            return String(ra[1]).localeCompare(String(rb[1]));
+          }).map(k => '  ' + k.padEnd(6) + ' mapped: ' + String(perChrom[k].mapped).padStart(8) + '   unmapped: ' + String(perChrom[k].unmapped).padStart(8)),
+          '',
+          'Not lifted: structural variants and breakend records (symbolic ALT,',
+          'or ALT containing brackets) are excluded, since they need dedicated',
+          'interval logic beyond simple coordinate remapping.',
+          '',
+          'REF/ALT are reverse-complemented on reverse-strand chain blocks, but',
+          'are not verified against the target build reference FASTA (this tool',
+          'has no access to one). Spot-check before using in a production pipeline.',
+          '',
+          'The lifted VCF is self-contained (genotypes travel with each record),',
+          'so unlike PLINK .bed/.fam there is no separate file to keep in sync.'
+        ].join('\n');
+        setDownloadLink(document.getElementById('dlSummary'), baseName + '.' + currentPair.to + '.liftover_summary.txt', summary);
+
+        finishCommon();
+        statusLine.textContent = 'Done. ' + totalMapped.toLocaleString() + ' of ' + dataLines.length.toLocaleString() + ' records mapped.';
+      } catch(err){
+        showFatalError(err);
+      }
+    }
+
+    setTimeout(step, 10);
+  }
+
+  // set the initial chain-file link now that chainState exists
+  selectPair(currentPair.key);
+
+})();
+</script>
+</body>
+</html>
